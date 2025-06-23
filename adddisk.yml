@@ -1,0 +1,92 @@
+---
+- name: Attach a new disk to a VM in OpenShift Virtualization
+  hosts: localhost
+  gather_facts: no
+  collections:
+    - kubernetes.core
+
+  vars:
+    namespace: linux-vm
+    vm_name: fedora-vm
+    disk_name: extra-disk
+    disk_size: 10Gi
+    storage_class: standard  # Adjust as needed
+    bus: virtio              # e.g. virtio, sata, scsi
+    target_dev: vdb          # e.g. vdb, vdc, etc.
+    access_mode: ReadWriteOnce
+    volume_mode: Filesystem
+
+  tasks:
+    - name: Stop the VM
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+        definition:
+          spec:
+            running: false
+
+    - name: Wait for VM to fully stop
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        namespace: "{{ namespace }}"
+        name: "{{ vm_name }}"
+      register: vmi_info
+      until: vmi_info.resources | length == 0
+      retries: 10
+      delay: 5
+      ignore_errors: true
+
+    - name: Create DataVolume for the new disk
+      k8s:
+        state: present
+        definition:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: "{{ disk_name }}"
+            namespace: "{{ namespace }}"
+          spec:
+            pvc:
+              accessModes:
+                - "{{ access_mode }}"
+              resources:
+                requests:
+                  storage: "{{ disk_size }}"
+              volumeMode: "{{ volume_mode }}"
+              storageClassName: "{{ storage_class }}"
+            source:
+              blank: {}
+
+    - name: Add disk and volume to VM definition
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        namespace: "{{ namespace }}"
+        name: "{{ vm_name }}"
+        definition:
+          spec:
+            template:
+              spec:
+                domain:
+                  devices:
+                    disks:
+                      - name: "{{ disk_name }}"
+                        disk:
+                          bus: "{{ bus }}"
+                volumes:
+                  - name: "{{ disk_name }}"
+                    dataVolume:
+                      name: "{{ disk_name }}"
+
+    - name: Start the VM
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        namespace: "{{ namespace }}"
+        name: "{{ vm_name }}"
+        definition:
+          spec:
+            running: true
