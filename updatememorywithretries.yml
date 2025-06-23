@@ -1,5 +1,5 @@
 ---
-- name: Update VM memory with manual retry on resource conflicts
+- name: Update RAM of a VM on OpenShift Virtualization (safe, minimal patch)
   hosts: localhost
   gather_facts: no
   collections:
@@ -9,11 +9,9 @@
     namespace: linux-vm
     vm_name: fedora-vm
     new_memory: "4Gi"
-    max_retries: 5
-    retry_delay: 3
 
   tasks:
-    - name: Stop the VM before editing
+    - name: Stop the VM
       k8s:
         api_version: kubevirt.io/v1
         kind: VirtualMachine
@@ -23,82 +21,38 @@
           spec:
             running: false
 
-    - name: Initialize retry counter and success flag
-      set_fact:
-        retry_count: 0
-        update_success: false
+    - name: Wait for VM to fully stop
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        namespace: "{{ namespace }}"
+        name: "{{ vm_name }}"
+      register: vmi_info
+      until: vmi_info.resources | length == 0
+      retries: 10
+      delay: 5
+      ignore_errors: true
 
-    - name: Retry updating VM memory until success or max retries
-      vars:
-        updated_vm: {}
-      block:
-        - name: Fetch latest VM definition
-          k8s_info:
-            api_version: kubevirt.io/v1
-            kind: VirtualMachine
-            namespace: "{{ namespace }}"
+    - name: Patch VM memory using strategic merge
+      k8s:
+        state: present
+        definition:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
             name: "{{ vm_name }}"
-          register: vm_info
+            namespace: "{{ namespace }}"
+          spec:
+            template:
+              spec:
+                domain:
+                  resources:
+                    requests:
+                      memory: "{{ new_memory }}"
+        merge_type:
+          - strategic-merge
 
-        - name: Prepare updated VM definition with new memory
-          set_fact:
-            domain_spec: "{{ vm_info.resources[0].spec.template.spec.domain }}"
-            updated_domain_spec: "{{ domain_spec | combine({'resources': {'requests': {'memory': new_memory}}}, recursive=True) }}"
-            updated_spec_template_spec: "{{ vm_info.resources[0].spec.template.spec | combine({'domain': updated_domain_spec}, recursive=True) }}"
-            updated_spec_template: "{{ vm_info.resources[0].spec.template | combine({'spec': updated_spec_template_spec}, recursive=True) }}"
-            updated_spec: "{{ vm_info.resources[0].spec | combine({'template': updated_spec_template}, recursive=True) }}"
-            updated_vm: >-
-              {{
-                vm_info.resources[0] | combine(
-                  {
-                    'spec': updated_spec,
-                    'metadata': {
-                      'resourceVersion': vm_info.resources[0].metadata.resourceVersion
-                    }
-                  }, recursive=True
-                )
-              }}
-
-        - name: Apply updated VM definition (patch)
-          k8s:
-            state: present
-            definition: "{{ updated_vm }}"
-          register: apply_result
-          failed_when: false  # Don't fail yet, handle manually
-
-        - name: Check if patch succeeded without Conflict error
-          set_fact:
-            update_success: "{{ (apply_result.failed is not defined or apply_result.failed == false) and ('Conflict' not in (apply_result.msg | default(''))) }}"
-
-        - name: Fail if patch failed for any reason other than Conflict
-          fail:
-            msg: "Failed to update VM memory: {{ apply_result.msg }}"
-          when: apply_result.failed and ('Conflict' not in (apply_result.msg | default('')))
-
-      rescue:
-        - debug:
-            msg: "Unexpected error in retry block."
-
-      always:
-        - name: Increment retry counter
-          set_fact:
-            retry_count: "{{ retry_count + 1 }}"
-
-        - name: Pause before next retry if needed
-          pause:
-            seconds: "{{ retry_delay }}"
-          when: not update_success and retry_count < max_retries
-
-      until: update_success or retry_count >= max_retries
-      retries: "{{ max_retries }}"
-      delay: "{{ retry_delay }}"
-
-    - name: Fail if we exhausted all retries without success
-      fail:
-        msg: "Failed to update VM memory after {{ max_retries }} retries due to resource conflicts."
-      when: not update_success
-
-    - name: Start the VM again after update
+    - name: Start the VM
       k8s:
         api_version: kubevirt.io/v1
         kind: VirtualMachine
