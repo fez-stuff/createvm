@@ -1,5 +1,5 @@
 ---
-- name: Update RAM of a VM on OpenShift Virtualization
+- name: Update RAM of a VM on OpenShift Virtualization (fetch-modify-replace)
   hosts: localhost
   gather_facts: no
   collections:
@@ -11,6 +11,14 @@
     new_memory: "4Gi"
 
   tasks:
+    - name: Get current VM definition
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        namespace: "{{ namespace }}"
+        name: "{{ vm_name }}"
+      register: vm_info
+
     - name: Stop the VM before editing
       k8s:
         api_version: kubevirt.io/v1
@@ -21,21 +29,14 @@
           spec:
             running: false
 
-    - name: Update the VM memory amount
+    - name: Modify the VM memory amount in the definition
+      set_fact:
+        updated_vm: "{{ vm_info.resources[0] | combine({'spec': vm_info.resources[0].spec | combine({'template': vm_info.resources[0].spec.template | combine({'spec': vm_info.resources[0].spec.template.spec | combine({'domain': vm_info.resources[0].spec.template.spec.domain | combine({'resources': {'requests': {'memory': new_memory}}})})})})}) }) }}"
+
+    - name: Apply updated VM definition
       k8s:
-        api_version: kubevirt.io/v1
-        kind: VirtualMachine
-        name: "{{ vm_name }}"
-        namespace: "{{ namespace }}"
-        merge_type: strategic-merge
-        definition:
-          spec:
-            template:
-              spec:
-                domain:
-                  resources:
-                    requests:
-                      memory: "{{ new_memory }}"
+        state: present
+        definition: "{{ updated_vm }}"
 
     - name: Start the VM again
       k8s:
