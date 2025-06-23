@@ -13,11 +13,17 @@
     retry_delay: 3
 
   tasks:
-    - name: Initialize retry counter
-      set_fact:
-        attempt: 0
+    - name: Stop the VM before editing
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+        definition:
+          spec:
+            running: false
 
-    - name: Update VM memory with retry loop
+    - name: Update VM memory with retries
       block:
         - name: Get current VM definition
           k8s_info:
@@ -26,16 +32,6 @@
             namespace: "{{ namespace }}"
             name: "{{ vm_name }}"
           register: vm_info
-
-        - name: Stop the VM before editing
-          k8s:
-            api_version: kubevirt.io/v1
-            kind: VirtualMachine
-            name: "{{ vm_name }}"
-            namespace: "{{ namespace }}"
-            definition:
-              spec:
-                running: false
 
         - name: Extract VM domain spec
           set_fact:
@@ -75,34 +71,23 @@
           k8s:
             state: present
             definition: "{{ updated_vm }}"
-
-        - name: Start the VM again
-          k8s:
-            api_version: kubevirt.io/v1
-            kind: VirtualMachine
-            name: "{{ vm_name }}"
-            namespace: "{{ namespace }}"
-            definition:
-              spec:
-                running: true
+          register: apply_result
+          failed_when: "'Conflict' in apply_result.msg"
+          retries: "{{ max_retries }}"
+          delay: "{{ retry_delay }}"
+          until: apply_result is succeeded
 
       rescue:
-        - name: Increment retry counter
-          set_fact:
-            attempt: "{{ attempt + 1 }}"
-
-        - name: Fail if max retries reached
+        - name: Fail after retries exhausted
           fail:
-            msg: "Failed to update VM after {{ max_retries }} retries due to conflict."
-          when: attempt >= max_retries
+            msg: "Failed to update VM memory after {{ max_retries }} retries due to conflict."
 
-        - name: Wait before retrying
-          pause:
-            seconds: "{{ retry_delay }}"
-
-        - name: Retry the block (using meta)
-          meta: clear_host_errors
-
-      until: attempt == 0
-      retries: "{{ max_retries }}"
-      delay: "{{ retry_delay }}"
+    - name: Start the VM again
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+        definition:
+          spec:
+            running: true
