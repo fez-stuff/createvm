@@ -42,4 +42,7 @@
         api_version: kubevirt.io/v1
         kind: VirtualMachine
         name: "{{ vm_name }}"
-        namespace: "{{
+        namespace: "{{ namespace }}"
+        definition:
+          spec:
+            running: true
