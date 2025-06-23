@@ -1,5 +1,5 @@
 ---
-- name: Update RAM of a VM on OpenShift Virtualization (fetch-modify-replace)
+- name: Update RAM of a VM on OpenShift Virtualization (fetch-modify-replace with safe nested update)
   hosts: localhost
   gather_facts: no
   collections:
@@ -29,9 +29,29 @@
           spec:
             running: false
 
-    - name: Modify the VM memory amount in the definition
+    - name: Extract VM spec.template.spec.domain
       set_fact:
-        updated_vm: "{{ vm_info.resources[0] | combine({'spec': vm_info.resources[0].spec | combine({'template': vm_info.resources[0].spec.template | combine({'spec': vm_info.resources[0].spec.template.spec | combine({'domain': vm_info.resources[0].spec.template.spec.domain | combine({'resources': {'requests': {'memory': new_memory}}})})})})}) }) }}"
+        domain_spec: "{{ vm_info.resources[0].spec.template.spec.domain }}"
+
+    - name: Update memory in domain spec
+      set_fact:
+        updated_domain_spec: "{{ domain_spec | combine({'resources': {'requests': {'memory': new_memory}}}, recursive=True) }}"
+
+    - name: Update spec.template.spec with new domain spec
+      set_fact:
+        updated_spec_template_spec: "{{ vm_info.resources[0].spec.template.spec | combine({'domain': updated_domain_spec}, recursive=True) }}"
+
+    - name: Update spec.template with new spec
+      set_fact:
+        updated_spec_template: "{{ vm_info.resources[0].spec.template | combine({'spec': updated_spec_template_spec}, recursive=True) }}"
+
+    - name: Update spec with new template
+      set_fact:
+        updated_spec: "{{ vm_info.resources[0].spec | combine({'template': updated_spec_template}, recursive=True) }}"
+
+    - name: Prepare updated VM definition
+      set_fact:
+        updated_vm: "{{ vm_info.resources[0] | combine({'spec': updated_spec}, recursive=True) }}"
 
     - name: Apply updated VM definition
       k8s:
