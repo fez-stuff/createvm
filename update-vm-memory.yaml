@@ -53,6 +53,10 @@
       set_fact:
         updated_vm: "{{ vm_info.resources[0] | combine({'spec': updated_spec}, recursive=True) }}"
 
+    - name: Preserve metadata.resourceVersion in updated VM
+      set_fact:
+        updated_vm: "{{ updated_vm | combine({'metadata': {'resourceVersion': vm_info.resources[0].metadata.resourceVersion}}, recursive=True) }}"
+    
     - name: Apply updated VM definition
       k8s:
         state: present
