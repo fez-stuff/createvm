@@ -27,7 +27,8 @@
         kind: VirtualMachine
         name: "{{ vm_name }}"
         namespace: "{{ namespace }}"
-        patch:
+        merge_type: strategic
+        definition:
           spec:
             template:
               spec:
@@ -35,7 +36,6 @@
                   resources:
                     requests:
                       memory: "{{ new_memory }}"
-        patch_type: merge
 
     - name: Start the VM again
       k8s:
