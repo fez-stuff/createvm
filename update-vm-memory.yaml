@@ -27,7 +27,7 @@
         kind: VirtualMachine
         name: "{{ vm_name }}"
         namespace: "{{ namespace }}"
-        merge_type: strategic
+        merge_type: strategic-merge
         definition:
           spec:
             template:
