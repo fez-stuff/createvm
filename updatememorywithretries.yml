@@ -1,5 +1,5 @@
 ---
-- name: Update RAM of a VM on OpenShift Virtualization with retry on conflict
+- name: Update RAM of VM with proper retries on patch only
   hosts: localhost
   gather_facts: no
   collections:
@@ -27,9 +27,9 @@
       set_fact:
         retry_count: 0
 
-    - name: Update VM memory with retry loop
+    - name: Retry updating VM memory
       block:
-        - name: Fetch VM info
+        - name: Get VM definition
           k8s_info:
             api_version: kubevirt.io/v1
             kind: VirtualMachine
@@ -56,7 +56,7 @@
                 )
               }}
 
-        - name: Try to apply updated VM definition
+        - name: Apply updated VM definition (patch)
           k8s:
             state: present
             definition: "{{ updated_vm }}"
@@ -73,11 +73,11 @@
             msg: "Failed to update VM memory after {{ max_retries }} retries due to conflict."
           when: retry_count >= max_retries
 
-        - name: Pause before retry
+        - name: Pause before retrying
           pause:
             seconds: "{{ retry_delay }}"
 
-        - name: Retry the block (meta)
+        - name: Retry the update block
           meta: clear_host_errors
 
       until: apply_result is succeeded
