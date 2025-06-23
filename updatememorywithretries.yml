@@ -1,5 +1,5 @@
 ---
-- name: Update RAM of a VM on OpenShift Virtualization with retry on conflict
+- name: Update RAM of a VM on OpenShift Virtualization with proper conflict retry
   hosts: localhost
   gather_facts: no
   collections:
@@ -24,58 +24,62 @@
             running: false
 
     - name: Update VM memory with retries
+      vars:
+        attempt: 0
       block:
-        - name: Get current VM definition
-          k8s_info:
-            api_version: kubevirt.io/v1
-            kind: VirtualMachine
-            namespace: "{{ namespace }}"
-            name: "{{ vm_name }}"
-          register: vm_info
-
-        - name: Extract VM domain spec
-          set_fact:
-            domain_spec: "{{ vm_info.resources[0].spec.template.spec.domain }}"
-
-        - name: Update memory in domain spec
-          set_fact:
-            updated_domain_spec: "{{ domain_spec | combine({'resources': {'requests': {'memory': new_memory}}}, recursive=True) }}"
-
-        - name: Update spec.template.spec with new domain spec
-          set_fact:
-            updated_spec_template_spec: "{{ vm_info.resources[0].spec.template.spec | combine({'domain': updated_domain_spec}, recursive=True) }}"
-
-        - name: Update spec.template with new spec
-          set_fact:
-            updated_spec_template: "{{ vm_info.resources[0].spec.template | combine({'spec': updated_spec_template_spec}, recursive=True) }}"
-
-        - name: Update spec with new template
-          set_fact:
-            updated_spec: "{{ vm_info.resources[0].spec | combine({'template': updated_spec_template}, recursive=True) }}"
-
-        - name: Prepare updated VM definition with resourceVersion
-          set_fact:
-            updated_vm: >-
-              {{
-                vm_info.resources[0] | combine(
-                  {
-                    'spec': updated_spec,
-                    'metadata': {
-                      'resourceVersion': vm_info.resources[0].metadata.resourceVersion
-                    }
-                  }, recursive=True
-                )
-              }}
-
-        - name: Apply updated VM definition
-          k8s:
-            state: present
-            definition: "{{ updated_vm }}"
-          register: apply_result
-          failed_when: "'Conflict' in apply_result.msg"
+        - name: Try to update VM memory (retry loop)
+          until: result is succeeded
           retries: "{{ max_retries }}"
           delay: "{{ retry_delay }}"
-          until: apply_result is succeeded
+          block:
+            - name: Get current VM definition
+              k8s_info:
+                api_version: kubevirt.io/v1
+                kind: VirtualMachine
+                namespace: "{{ namespace }}"
+                name: "{{ vm_name }}"
+              register: vm_info
+
+            - name: Extract VM domain spec
+              set_fact:
+                domain_spec: "{{ vm_info.resources[0].spec.template.spec.domain }}"
+
+            - name: Update memory in domain spec
+              set_fact:
+                updated_domain_spec: "{{ domain_spec | combine({'resources': {'requests': {'memory': new_memory}}}, recursive=True) }}"
+
+            - name: Update spec.template.spec with new domain spec
+              set_fact:
+                updated_spec_template_spec: "{{ vm_info.resources[0].spec.template.spec | combine({'domain': updated_domain_spec}, recursive=True) }}"
+
+            - name: Update spec.template with new spec
+              set_fact:
+                updated_spec_template: "{{ vm_info.resources[0].spec.template | combine({'spec': updated_spec_template_spec}, recursive=True) }}"
+
+            - name: Update spec with new template
+              set_fact:
+                updated_spec: "{{ vm_info.resources[0].spec | combine({'template': updated_spec_template}, recursive=True) }}"
+
+            - name: Prepare updated VM definition with resourceVersion
+              set_fact:
+                updated_vm: >-
+                  {{
+                    vm_info.resources[0] | combine(
+                      {
+                        'spec': updated_spec,
+                        'metadata': {
+                          'resourceVersion': vm_info.resources[0].metadata.resourceVersion
+                        }
+                      }, recursive=True
+                    )
+                  }}
+
+            - name: Apply updated VM definition
+              k8s:
+                state: present
+                definition: "{{ updated_vm }}"
+              register: result
+              failed_when: "'Conflict' in result.msg"
 
       rescue:
         - name: Fail after retries exhausted
