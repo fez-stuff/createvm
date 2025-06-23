@@ -1,5 +1,5 @@
 ---
-- name: Update RAM of a VM on OpenShift Virtualization (safe, minimal patch)
+- name: Update RAM of a VM on OpenShift Virtualization (safe and compatible)
   hosts: localhost
   gather_facts: no
   collections:
@@ -15,8 +15,8 @@
       k8s:
         api_version: kubevirt.io/v1
         kind: VirtualMachine
-        name: "{{ vm_name }}"
         namespace: "{{ namespace }}"
+        name: "{{ vm_name }}"
         definition:
           spec:
             running: false
@@ -33,15 +33,13 @@
       delay: 5
       ignore_errors: true
 
-    - name: Patch VM memory using strategic merge
+    - name: Update VM memory (minimal definition, implicit merge patch)
       k8s:
-        state: present
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        namespace: "{{ namespace }}"
+        name: "{{ vm_name }}"
         definition:
-          apiVersion: kubevirt.io/v1
-          kind: VirtualMachine
-          metadata:
-            name: "{{ vm_name }}"
-            namespace: "{{ namespace }}"
           spec:
             template:
               spec:
@@ -49,15 +47,13 @@
                   resources:
                     requests:
                       memory: "{{ new_memory }}"
-        merge_type:
-          - strategic-merge
 
     - name: Start the VM
       k8s:
         api_version: kubevirt.io/v1
         kind: VirtualMachine
-        name: "{{ vm_name }}"
         namespace: "{{ namespace }}"
+        name: "{{ vm_name }}"
         definition:
           spec:
             running: true
