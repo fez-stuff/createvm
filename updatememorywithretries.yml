@@ -1,5 +1,5 @@
 ---
-- name: Update RAM of VM with proper retries on patch only
+- name: Update VM memory with manual retry on resource conflicts
   hosts: localhost
   gather_facts: no
   collections:
@@ -23,13 +23,16 @@
           spec:
             running: false
 
-    - name: Initialize retry counter
+    - name: Initialize retry counter and success flag
       set_fact:
         retry_count: 0
+        update_success: false
 
-    - name: Retry updating VM memory
+    - name: Retry updating VM memory until success or max retries
+      vars:
+        updated_vm: {}
       block:
-        - name: Get VM definition
+        - name: Fetch latest VM definition
           k8s_info:
             api_version: kubevirt.io/v1
             kind: VirtualMachine
@@ -37,7 +40,7 @@
             name: "{{ vm_name }}"
           register: vm_info
 
-        - name: Prepare updated VM definition
+        - name: Prepare updated VM definition with new memory
           set_fact:
             domain_spec: "{{ vm_info.resources[0].spec.template.spec.domain }}"
             updated_domain_spec: "{{ domain_spec | combine({'resources': {'requests': {'memory': new_memory}}}, recursive=True) }}"
@@ -61,30 +64,41 @@
             state: present
             definition: "{{ updated_vm }}"
           register: apply_result
-          failed_when: "'Conflict' in apply_result.msg"
+          failed_when: false  # Don't fail yet, handle manually
+
+        - name: Check if patch succeeded without Conflict error
+          set_fact:
+            update_success: "{{ (apply_result.failed is not defined or apply_result.failed == false) and ('Conflict' not in (apply_result.msg | default(''))) }}"
+
+        - name: Fail if patch failed for any reason other than Conflict
+          fail:
+            msg: "Failed to update VM memory: {{ apply_result.msg }}"
+          when: apply_result.failed and ('Conflict' not in (apply_result.msg | default('')))
 
       rescue:
+        - debug:
+            msg: "Unexpected error in retry block."
+
+      always:
         - name: Increment retry counter
           set_fact:
             retry_count: "{{ retry_count + 1 }}"
 
-        - name: Fail if max retries reached
-          fail:
-            msg: "Failed to update VM memory after {{ max_retries }} retries due to conflict."
-          when: retry_count >= max_retries
-
-        - name: Pause before retrying
+        - name: Pause before next retry if needed
           pause:
             seconds: "{{ retry_delay }}"
+          when: not update_success and retry_count < max_retries
 
-        - name: Retry the update block
-          meta: clear_host_errors
-
-      until: apply_result is succeeded
+      until: update_success or retry_count >= max_retries
       retries: "{{ max_retries }}"
       delay: "{{ retry_delay }}"
 
-    - name: Start the VM again
+    - name: Fail if we exhausted all retries without success
+      fail:
+        msg: "Failed to update VM memory after {{ max_retries }} retries due to resource conflicts."
+      when: not update_success
+
+    - name: Start the VM again after update
       k8s:
         api_version: kubevirt.io/v1
         kind: VirtualMachine
