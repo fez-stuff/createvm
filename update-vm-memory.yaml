@@ -1,0 +1,45 @@
+---
+- name: Update RAM of a VM on OpenShift Virtualization
+  hosts: localhost
+  gather_facts: no
+  collections:
+    - kubernetes.core
+
+  vars:
+    namespace: linux-vm
+    vm_name: fedora-vm
+    new_memory: "4Gi"
+
+  tasks:
+    - name: Stop the VM before editing
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+        definition:
+          spec:
+            running: false
+
+    - name: Update the VM memory amount
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+        merge_type: strategic
+        definition:
+          spec:
+            template:
+              spec:
+                domain:
+                  resources:
+                    requests:
+                      memory: "{{ new_memory }}"
+
+    - name: Start the VM again
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{
